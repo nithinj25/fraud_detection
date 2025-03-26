@@ -54,8 +54,30 @@ async def predict_fraud(claim: InsuranceClaim):
         raise HTTPException(status_code=500, detail="Model not loaded")
     
     try:
-        # Convert input to DataFrame
+        # Convert input to DataFrame with correct feature names
         input_data = pd.DataFrame([claim.dict()])
+        
+        # Ensure feature names match training data
+        feature_columns = [
+            'INSURANCE_TYPE', 'MARITAL_STATUS', 'EMPLOYMENT_STATUS', 'RISK_SEGMENTATION',
+            'HOUSE_TYPE', 'SOCIAL_CLASS', 'CUSTOMER_EDUCATION_LEVEL', 'CLAIM_STATUS',
+            'INCIDENT_SEVERITY', 'PREMIUM_AMOUNT', 'CLAIM_AMOUNT', 'AGE', 'TENURE',
+            'NO_OF_FAMILY_MEMBERS', 'days_to_loss', 'claim_premium_ratio',
+            'INCIDENT_HOUR_OF_THE_DAY', 'ANY_INJURY'
+        ]
+        
+        # Convert categorical variables to numeric
+        categorical_columns = [
+            'INSURANCE_TYPE', 'MARITAL_STATUS', 'EMPLOYMENT_STATUS', 'RISK_SEGMENTATION',
+            'HOUSE_TYPE', 'SOCIAL_CLASS', 'CUSTOMER_EDUCATION_LEVEL', 'CLAIM_STATUS',
+            'INCIDENT_SEVERITY'
+        ]
+        
+        for col in categorical_columns:
+            input_data[col] = pd.Categorical(input_data[col]).codes
+        
+        # Select only the required features in the correct order
+        input_data = input_data[feature_columns]
         
         # Make prediction
         prediction = model.predict(input_data)
@@ -83,8 +105,30 @@ async def predict_fraud_batch(claims: BatchInsuranceClaims):
         raise HTTPException(status_code=500, detail="Model not loaded")
     
     try:
-        # Convert input to DataFrame
+        # Convert input to DataFrame with correct feature names
         input_data = pd.DataFrame([claim.dict() for claim in claims.claims])
+        
+        # Ensure feature names match training data
+        feature_columns = [
+            'INSURANCE_TYPE', 'MARITAL_STATUS', 'EMPLOYMENT_STATUS', 'RISK_SEGMENTATION',
+            'HOUSE_TYPE', 'SOCIAL_CLASS', 'CUSTOMER_EDUCATION_LEVEL', 'CLAIM_STATUS',
+            'INCIDENT_SEVERITY', 'PREMIUM_AMOUNT', 'CLAIM_AMOUNT', 'AGE', 'TENURE',
+            'NO_OF_FAMILY_MEMBERS', 'days_to_loss', 'claim_premium_ratio',
+            'INCIDENT_HOUR_OF_THE_DAY', 'ANY_INJURY'
+        ]
+        
+        # Convert categorical variables to numeric
+        categorical_columns = [
+            'INSURANCE_TYPE', 'MARITAL_STATUS', 'EMPLOYMENT_STATUS', 'RISK_SEGMENTATION',
+            'HOUSE_TYPE', 'SOCIAL_CLASS', 'CUSTOMER_EDUCATION_LEVEL', 'CLAIM_STATUS',
+            'INCIDENT_SEVERITY'
+        ]
+        
+        for col in categorical_columns:
+            input_data[col] = pd.Categorical(input_data[col]).codes
+        
+        # Select only the required features in the correct order
+        input_data = input_data[feature_columns]
         
         # Make predictions
         predictions = model.predict(input_data)
@@ -115,5 +159,6 @@ async def predict_fraud_batch(claims: BatchInsuranceClaims):
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8001))
+    port = int(os.environ.get("PORT", 8005))
+    print(f"Starting server on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port) 

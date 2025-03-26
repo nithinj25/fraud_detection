@@ -1,190 +1,140 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix
 import joblib
+import warnings
+warnings.filterwarnings('ignore')
 
-# Load the dataset
-def load_data(file_path):
-    """
-    Load the insurance dataset and perform initial preprocessing
+def create_fraud_target(df):
+    # Create a target variable based on multiple indicators with balanced criteria
     
-    Args:
-        file_path (str): Path to the CSV file
+    # Calculate the 90th percentile of claim-to-premium ratio (less strict)
+    high_claim_ratio = df['CLAIM_AMOUNT'].div(df['PREMIUM_AMOUNT']).quantile(0.90)
     
-    Returns:
-        pd.DataFrame: Preprocessed dataset
-    """
-    # Read the CSV file
-    df = pd.read_csv(file_path)
+    # Calculate suspicious hours (late night/early morning)
+    suspicious_hours = (df['INCIDENT_HOUR_OF_THE_DAY'] >= 22) | (df['INCIDENT_HOUR_OF_THE_DAY'] <= 5)
     
-    # Data Cleaning and Preprocessing
-    # Convert date columns to datetime
-    date_columns = ['TXN_DATE_TIME', 'POLICY_EFF_DT', 'LOSS_DT', 'REPORT_DT']
-    for col in date_columns:
-        df[col] = pd.to_datetime(df[col], errors='coerce')
+    fraud_indicators = (
+        # Condition 1: High claim amount relative to premium
+        (df['CLAIM_AMOUNT'] > df['PREMIUM_AMOUNT'] * high_claim_ratio) |
+        
+        # Condition 2: Multiple risk factors
+        ((df['days_to_loss'] < 90) &  # Quick claim
+         (df['INCIDENT_SEVERITY'] == 'High') & 
+         (df['RISK_SEGMENTATION'] == 'High')) |
+        
+        # Condition 3: Suspicious timing with risk factors
+        (suspicious_hours & 
+         (df['INCIDENT_SEVERITY'] == 'High') & 
+         (df['CLAIM_STATUS'] == 'Pending')) |
+        
+        # Condition 4: Very high claim amount for high risk
+        ((df['RISK_SEGMENTATION'] == 'High') & 
+         (df['CLAIM_AMOUNT'] > df['PREMIUM_AMOUNT'] * 3))
+    )
+    return fraud_indicators.astype(int)
+
+def prepare_features(df):
+    # Calculate days to loss
+    df['days_to_loss'] = (pd.to_datetime(df['LOSS_DT']) - pd.to_datetime(df['POLICY_EFF_DT'])).dt.days
     
-    # Feature Engineering
-    # Calculate days between policy effective date and loss date
-    df['days_to_loss'] = (df['LOSS_DT'] - df['POLICY_EFF_DT']).dt.days
-    
-    # Calculate claim amount to premium ratio
+    # Calculate claim to premium ratio
     df['claim_premium_ratio'] = df['CLAIM_AMOUNT'] / df['PREMIUM_AMOUNT']
     
-    # Create a fraud flag (for demonstration, we'll use some heuristics)
-    def flag_potential_fraud(row):
-        # Potential fraud indicators
-        suspicious_conditions = [
-            # Extremely short policy tenure before claim
-            row['days_to_loss'] < 30 and row['CLAIM_AMOUNT'] > row['PREMIUM_AMOUNT'] * 2,
-            # Unreasonably high claim amount compared to premium
-            row['claim_premium_ratio'] > 5,
-            # Suspicious incident timing (late night)
-            row['INCIDENT_HOUR_OF_THE_DAY'] > 22 or row['INCIDENT_HOUR_OF_THE_DAY'] < 5,
-            # Incomplete documentation
-            row['POLICE_REPORT_AVAILABLE'] == 0,
-            # High severity incidents
-            row['INCIDENT_SEVERITY'] == 'High'
-        ]
-        return int(any(suspicious_conditions))
-    
-    df['FRAUD_FLAG'] = df.apply(flag_potential_fraud, axis=1)
-    
-    return df
-
-# Prepare features for machine learning
-def prepare_features(df):
-    """
-    Prepare features for fraud detection model
-    
-    Args:
-        df (pd.DataFrame): Preprocessed dataset
-    
-    Returns:
-        tuple: X (features), y (fraud flag)
-    """
     # Select features for the model
-    categorical_features = [
-        'INSURANCE_TYPE', 'MARITAL_STATUS', 'EMPLOYMENT_STATUS', 
-        'RISK_SEGMENTATION', 'HOUSE_TYPE', 'SOCIAL_CLASS',
-        'CUSTOMER_EDUCATION_LEVEL', 'CLAIM_STATUS', 'INCIDENT_SEVERITY'
-    ]
-    
-    numerical_features = [
-        'PREMIUM_AMOUNT', 'CLAIM_AMOUNT', 'AGE', 'TENURE', 
+    feature_columns = [
+        'INSURANCE_TYPE', 'MARITAL_STATUS', 'EMPLOYMENT_STATUS', 'RISK_SEGMENTATION',
+        'HOUSE_TYPE', 'SOCIAL_CLASS', 'CUSTOMER_EDUCATION_LEVEL', 'CLAIM_STATUS',
+        'INCIDENT_SEVERITY', 'PREMIUM_AMOUNT', 'CLAIM_AMOUNT', 'AGE', 'TENURE',
         'NO_OF_FAMILY_MEMBERS', 'days_to_loss', 'claim_premium_ratio',
         'INCIDENT_HOUR_OF_THE_DAY', 'ANY_INJURY'
     ]
     
-    # Prepare the feature matrix and target variable
-    X = df[categorical_features + numerical_features]
-    y = df['FRAUD_FLAG']
+    # Convert categorical variables to numeric
+    categorical_columns = [
+        'INSURANCE_TYPE', 'MARITAL_STATUS', 'EMPLOYMENT_STATUS', 'RISK_SEGMENTATION',
+        'HOUSE_TYPE', 'SOCIAL_CLASS', 'CUSTOMER_EDUCATION_LEVEL', 'CLAIM_STATUS',
+        'INCIDENT_SEVERITY'
+    ]
     
-    return X, y
+    # Create a copy of the DataFrame to avoid modifying the original
+    df_encoded = df.copy()
+    
+    for col in categorical_columns:
+        df_encoded[col] = pd.Categorical(df[col]).codes
+    
+    return df_encoded[feature_columns]
 
-# Create and train the fraud detection model
-def create_fraud_detection_model(X, y):
-    """
-    Create and train a fraud detection model
-    
-    Args:
-        X (pd.DataFrame): Features
-        y (pd.Series): Fraud flag
-    
-    Returns:
-        tuple: Trained model, preprocessor
-    """
-    # Split the data
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-    
-    # Preprocessing for numerical and categorical data
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', StandardScaler(), 
-             ['PREMIUM_AMOUNT', 'CLAIM_AMOUNT', 'AGE', 'TENURE', 
-              'NO_OF_FAMILY_MEMBERS', 'days_to_loss', 'claim_premium_ratio',
-              'INCIDENT_HOUR_OF_THE_DAY', 'ANY_INJURY']),
-            ('cat', OneHotEncoder(handle_unknown='ignore'), 
-             ['INSURANCE_TYPE', 'MARITAL_STATUS', 'EMPLOYMENT_STATUS', 
-              'RISK_SEGMENTATION', 'HOUSE_TYPE', 'SOCIAL_CLASS',
-              'CUSTOMER_EDUCATION_LEVEL', 'CLAIM_STATUS', 'INCIDENT_SEVERITY'])
-        ])
-    
-    # Create a pipeline
-    model = Pipeline([
-        ('preprocessor', preprocessor),
-        ('classifier', RandomForestClassifier(
-            n_estimators=100, 
-            class_weight='balanced', 
-            random_state=42
-        ))
-    ])
-    
-    # Train the model
-    model.fit(X_train, y_train)
-    
-    # Evaluate the model
-    y_pred = model.predict(X_test)
-    print("Model Performance:")
-    print(classification_report(y_test, y_pred))
-    print("\nConfusion Matrix:")
-    print(confusion_matrix(y_test, y_pred))
-    
-    return model, preprocessor
-
-# Main execution function
 def main():
     # Load the data
-    df = load_data('insurance_data.csv')
+    print("Loading data...")
+    df = pd.read_csv('insurance_data.csv')
     
-    # Prepare features
-    X, y = prepare_features(df)
+    # Prepare features and target
+    X = prepare_features(df)
+    y = create_fraud_target(df)
     
-    # Create and train the model
-    fraud_model, preprocessor = create_fraud_detection_model(X, y)
+    # Print class distribution
+    print("\nClass Distribution:")
+    print(pd.Series(y).value_counts(normalize=True))
+    
+    # Split the data
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    
+    # Create and fit the preprocessor
+    preprocessor = StandardScaler()
+    X_train_scaled = preprocessor.fit_transform(X_train)
+    X_test_scaled = preprocessor.transform(X_test)
+    
+    # Create and train the model with balanced class weights
+    print("\nTraining the model...")
+    model = RandomForestClassifier(
+        n_estimators=200,
+        max_depth=15,
+        min_samples_split=5,
+        min_samples_leaf=2,
+        class_weight='balanced',
+        random_state=42
+    )
+    model.fit(X_train_scaled, y_train)
+    
+    # Make predictions on training data
+    y_train_pred = model.predict(X_train_scaled)
+    y_train_prob = model.predict_proba(X_train_scaled)
+    
+    # Print training data performance
+    print("\nTraining Data Performance:")
+    print(classification_report(y_train, y_train_pred))
+    print("\nTraining Data Confusion Matrix:")
+    print(confusion_matrix(y_train, y_train_pred))
+    
+    # Make predictions on test data
+    y_test_pred = model.predict(X_test_scaled)
+    y_test_prob = model.predict_proba(X_test_scaled)
+    
+    # Print test data performance
+    print("\nTest Data Performance:")
+    print(classification_report(y_test, y_test_pred))
+    print("\nTest Data Confusion Matrix:")
+    print(confusion_matrix(y_test, y_test_pred))
+    
+    # Feature importance
+    feature_importance = pd.DataFrame({
+        'feature': X.columns,
+        'importance': model.feature_importances_
+    }).sort_values('importance', ascending=False)
+    
+    print("\nTop 10 Most Important Features:")
+    print(feature_importance.head(10))
     
     # Save the model and preprocessor
-    joblib.dump(fraud_model, 'fraud_detection_model.joblib')
+    print("\nSaving model and preprocessor...")
+    joblib.dump(model, 'fraud_detection_model.joblib')
     joblib.dump(preprocessor, 'fraud_detection_preprocessor.joblib')
-    
-    # Provide insights into fraud indicators
-    fraud_cases = df[df['FRAUD_FLAG'] == 1]
-    print("\nFraud Detection Insights:")
-    print(f"Total Potential Fraud Cases: {len(fraud_cases)}")
-    print("\nTop Fraud Indicators:")
-    
-    # Analyze fraud indicators
-    indicator_columns = [
-        'INSURANCE_TYPE', 'RISK_SEGMENTATION', 
-        'INCIDENT_SEVERITY', 'EMPLOYMENT_STATUS'
-    ]
-    for col in indicator_columns:
-        print(f"\n{col} Distribution in Fraud Cases:")
-        print(fraud_cases[col].value_counts(normalize=True))
+    print("Model and preprocessor saved successfully!")
 
-# Prediction function for new data
-def predict_fraud(new_data):
-    """
-    Predict fraud for new insurance claims
-    
-    Args:
-        new_data (pd.DataFrame): New insurance claims data
-    
-    Returns:
-        np.array: Fraud predictions
-    """
-    # Load the saved model and preprocessor
-    model = joblib.load('fraud_detection_model.joblib')
-    
-    # Preprocess and predict
-    predictions = model.predict(new_data)
-    return predictions
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
