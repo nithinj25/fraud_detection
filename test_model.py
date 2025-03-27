@@ -5,7 +5,7 @@ import time
 
 def test_api():
     # API endpoint - Update this with your Render URL after deployment
-    BASE_URL = "https://fraud-detection-api.onrender.com"  # Replace with your actual Render URL
+    BASE_URL = "https://fraud-detection-87in.onrender.com"  # Replace with your actual Render URL
     
     # Test single prediction with low-risk case
     print("\nTesting single claim prediction (Low Risk Case)...")

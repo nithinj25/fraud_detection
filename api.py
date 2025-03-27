@@ -12,44 +12,42 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Define the input data model
-class InsuranceClaim(BaseModel):
-    INSURANCE_TYPE: str
-    MARITAL_STATUS: str
-    EMPLOYMENT_STATUS: str
-    RISK_SEGMENTATION: str
-    HOUSE_TYPE: str
-    SOCIAL_CLASS: str
-    CUSTOMER_EDUCATION_LEVEL: str
-    CLAIM_STATUS: str
-    INCIDENT_SEVERITY: str
-    PREMIUM_AMOUNT: float
-    CLAIM_AMOUNT: float
-    AGE: int
-    TENURE: int
-    NO_OF_FAMILY_MEMBERS: int
-    days_to_loss: int
-    claim_premium_ratio: float
-    INCIDENT_HOUR_OF_THE_DAY: int
-    ANY_INJURY: int
+# Define the essential features
+ESSENTIAL_FEATURES = [
+    'CLAIM_AMOUNT',
+    'days_to_loss',
+    'claim_premium_ratio',
+    'avg_claim_amount',
+    'quick_claim'
+]
 
-class BatchInsuranceClaims(BaseModel):
-    claims: List[InsuranceClaim]
-
-# Load the model at startup
+# Load the model and preprocessor
 model = None
+scaler = None
+
 try:
     model = joblib.load('fraud_detection_model.joblib')
-    print("Model loaded successfully!")
+    scaler = joblib.load('fraud_detection_preprocessor.joblib')
+    print("Model and preprocessor loaded successfully!")
 except Exception as e:
     print(f"Error loading model: {str(e)}")
 
+class EssentialClaim(BaseModel):
+    CLAIM_AMOUNT: float
+    days_to_loss: int
+    claim_premium_ratio: float
+    avg_claim_amount: float
+    quick_claim: int
+
+class BatchEssentialClaims(BaseModel):
+    claims: List[EssentialClaim]
+
 @app.get("/")
 async def root():
-    return {"message": "Welcome to Insurance Fraud Detection API"}
+    return {"message": "Insurance Fraud Detection API is running"}
 
 @app.post("/predict", response_model=dict)
-async def predict_fraud(claim: InsuranceClaim):
+async def predict_fraud(claim: EssentialClaim):
     if model is None:
         raise HTTPException(status_code=500, detail="Model not loaded")
     
@@ -58,26 +56,7 @@ async def predict_fraud(claim: InsuranceClaim):
         input_data = pd.DataFrame([claim.dict()])
         
         # Ensure feature names match training data
-        feature_columns = [
-            'INSURANCE_TYPE', 'MARITAL_STATUS', 'EMPLOYMENT_STATUS', 'RISK_SEGMENTATION',
-            'HOUSE_TYPE', 'SOCIAL_CLASS', 'CUSTOMER_EDUCATION_LEVEL', 'CLAIM_STATUS',
-            'INCIDENT_SEVERITY', 'PREMIUM_AMOUNT', 'CLAIM_AMOUNT', 'AGE', 'TENURE',
-            'NO_OF_FAMILY_MEMBERS', 'days_to_loss', 'claim_premium_ratio',
-            'INCIDENT_HOUR_OF_THE_DAY', 'ANY_INJURY'
-        ]
-        
-        # Convert categorical variables to numeric
-        categorical_columns = [
-            'INSURANCE_TYPE', 'MARITAL_STATUS', 'EMPLOYMENT_STATUS', 'RISK_SEGMENTATION',
-            'HOUSE_TYPE', 'SOCIAL_CLASS', 'CUSTOMER_EDUCATION_LEVEL', 'CLAIM_STATUS',
-            'INCIDENT_SEVERITY'
-        ]
-        
-        for col in categorical_columns:
-            input_data[col] = pd.Categorical(input_data[col]).codes
-        
-        # Select only the required features in the correct order
-        input_data = input_data[feature_columns]
+        input_data = input_data[ESSENTIAL_FEATURES]
         
         # Make prediction
         prediction = model.predict(input_data)
@@ -91,7 +70,7 @@ async def predict_fraud(claim: InsuranceClaim):
         
         return {
             "claim_id": "1",
-            "risk_level": "High" if claim.RISK_SEGMENTATION == "High" else "Medium" if claim.RISK_SEGMENTATION == "Medium" else "Low",
+            "risk_level": "High" if fraud_probability > 0.7 else "Medium" if fraud_probability > 0.3 else "Low",
             "prediction": bool(prediction[0]),
             "fraud_probability": fraud_probability
         }
@@ -100,7 +79,7 @@ async def predict_fraud(claim: InsuranceClaim):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/predict_batch", response_model=dict)
-async def predict_fraud_batch(claims: BatchInsuranceClaims):
+async def predict_fraud_batch(claims: BatchEssentialClaims):
     if model is None:
         raise HTTPException(status_code=500, detail="Model not loaded")
     
@@ -109,26 +88,7 @@ async def predict_fraud_batch(claims: BatchInsuranceClaims):
         input_data = pd.DataFrame([claim.dict() for claim in claims.claims])
         
         # Ensure feature names match training data
-        feature_columns = [
-            'INSURANCE_TYPE', 'MARITAL_STATUS', 'EMPLOYMENT_STATUS', 'RISK_SEGMENTATION',
-            'HOUSE_TYPE', 'SOCIAL_CLASS', 'CUSTOMER_EDUCATION_LEVEL', 'CLAIM_STATUS',
-            'INCIDENT_SEVERITY', 'PREMIUM_AMOUNT', 'CLAIM_AMOUNT', 'AGE', 'TENURE',
-            'NO_OF_FAMILY_MEMBERS', 'days_to_loss', 'claim_premium_ratio',
-            'INCIDENT_HOUR_OF_THE_DAY', 'ANY_INJURY'
-        ]
-        
-        # Convert categorical variables to numeric
-        categorical_columns = [
-            'INSURANCE_TYPE', 'MARITAL_STATUS', 'EMPLOYMENT_STATUS', 'RISK_SEGMENTATION',
-            'HOUSE_TYPE', 'SOCIAL_CLASS', 'CUSTOMER_EDUCATION_LEVEL', 'CLAIM_STATUS',
-            'INCIDENT_SEVERITY'
-        ]
-        
-        for col in categorical_columns:
-            input_data[col] = pd.Categorical(input_data[col]).codes
-        
-        # Select only the required features in the correct order
-        input_data = input_data[feature_columns]
+        input_data = input_data[ESSENTIAL_FEATURES]
         
         # Make predictions
         predictions = model.predict(input_data)
@@ -144,7 +104,7 @@ async def predict_fraud_batch(claims: BatchInsuranceClaims):
             
             results.append({
                 "claim_id": str(i + 1),
-                "risk_level": "High" if claim.RISK_SEGMENTATION == "High" else "Medium" if claim.RISK_SEGMENTATION == "Medium" else "Low",
+                "risk_level": "High" if fraud_probability > 0.7 else "Medium" if fraud_probability > 0.3 else "Low",
                 "prediction": bool(pred),
                 "fraud_probability": fraud_probability
             })
@@ -159,6 +119,6 @@ async def predict_fraud_batch(claims: BatchInsuranceClaims):
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8005))
+    port = int(os.environ.get("PORT", 1248))
     print(f"Starting server on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port) 
