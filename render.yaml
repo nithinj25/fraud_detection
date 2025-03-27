@@ -3,7 +3,9 @@ services:
     name: fraud-detection-api
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    startCommand: python api.py
     envVars:
       - key: PYTHON_VERSION
-        value: 3.12.0 
+        value: 3.12.0
+      - key: PORT
+        value: 10000 
